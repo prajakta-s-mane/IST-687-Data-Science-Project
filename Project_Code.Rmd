@@ -1,0 +1,559 @@
+---
+title: "Project"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Reading and cleaning data
+
+```{r}
+#install.packages("tidyverse")
+library(tidyverse)
+
+data<-read_csv("https://intro-datascience.s3.us-east-2.amazonaws.com/Resort01.csv")
+nrow(data)
+#removes data where the weekend nights and the week nights are zero. Basically total nights stayed are zero.
+data_new<-data[!(data$StaysInWeekendNights == 0 & data$StaysInWeekNights == 0), ]
+nrow(data_new)
+#Removes data where the country is NULL
+df1 <- data_new[-which(data_new$Country=="NULL"),]
+nrow(df1)
+#Removes data where adults are zero as children and babies cannot stay alone in the hotel. They have to be accompanied by Adults 
+df2 <- df1[-which(data_new$Adults==0),]
+nrow(df2)
+df2$TotalNumberOfDaysStayed <- df2$StaysInWeekendNights + df2$StaysInWeekNights
+df2$DoNotGetRoomChoice <- ifelse(df2$ReservedRoomType != df2$AssignedRoomType,1,0)
+
+head(df2)
+#View(df2)
+```
+
+
+
+```{r}
+#Removing many irrelevant rows based on the total nights stayed
+#plotting a boxplot to find outliers in the dataset based on the number of nights
+library(ggplot2)
+ggplot(data = df2) + geom_boxplot(mapping = aes(x = TotalNumberOfDaysStayed)) + coord_flip() # So many outliers.
+
+# Checking how many people stayed for more than 15 days.
+length(which(df2$TotalNumberOfDaysStayed > 14))  # 277 rows
+
+# We can remove these 277 rows since TotalNumberOfDaysStayedg at a hotel for a max of 2 weeks seems illogical. 
+
+df2<- df2%>% filter(TotalNumberOfDaysStayed <15)
+nrow(df2)
+```
+
+#Adding Column Visitor Type
+```{r}
+#install.packages("dbplyr")
+library(dbplyr)
+'%notin%' <- Negate('%in%')
+
+df2$VisitorType <- c(1:nrow(df2))   # Initializing
+
+# SOLO TRAVELER
+df2$VisitorType[which(df2$Adults == 1 & df2$Babies == 0 & df2$Children == 0  & df2$CustomerType %notin% "Group" )] <- "Solo Traveler"
+
+# COUPLE
+df2$VisitorType[which(df2$Adults == 2 & df2$Babies == 0 & df2$Children == 0  & df2$CustomerType %notin% "Group" )] <- "Couple"
+
+# FAMILY
+df2$VisitorType[which(df2$Adults >= 2 & (df2$Babies != 0 | df2$Children != 0 ) & df2$MarketSegment != "Corporate" & df2$CustomerType %notin% "Contract")] <- "Family"
+
+# BUSINESS TRAVEL
+df2$VisitorType[which(df2$Babies == 0 & df2$Children == 0 & df2$MarketSegment == "Corporate")] <- "Business Travel"
+
+dataframe <-
+  df2[which(
+    df2$VisitorType %notin% c("Solo Traveler", "Couple", "Business Travel", "Family")
+  ),
+  c("Adults",
+    "Children",
+    "Babies",
+    "MarketSegment",
+    "CustomerType")]
+
+#Analyzing above dataframe, remaining rows are majorly 3 adults having either 1 or more children or 1 or more babies and distribution channel as TA/TO - can classify 
+# them as families 
+
+# FAMILY
+df2$VisitorType[which(df2$VisitorType %notin% c("Solo Traveler", "Couple", "Business Travel") & df2$Adults >= 3 
+                                & df2$MarketSegment != "Corporate" & df2$CustomerType %notin% "Contract")] <- "Family"
+# Families rarely will have contract bookings, so excluded Customer Type as Contract.
+
+# Checking rows which are left to be labeled a visitor type
+length(df2$VisitorType[which(df2$VisitorType %notin% c("Solo Traveler", "Couple", "Business Travel", "Family"))])      # 1214 rows.
+
+# Removing remaining 1214 rows.
+df2 <- df2 %>% slice(-which(df2$VisitorType %notin% c("Solo Traveler", "Couple", "Business Travel", "Family")))
+
+
+mytable<-table(df2$VisitorType)
+df2$VisitorType <- as.factor(df2$VisitorType)
+
+lbls <- paste(names(mytable), "\n", mytable, sep="")
+pie(mytable, labels = lbls,
+   main="Pie Chart of Species\n (with sample sizes)")
+
+
+#View(df2)
+nrow(df2)
+
+```
+
+
+
+#Subsetting the data depending upon whether the booking is cancelled or not.
+```{r}
+notcancelled<-(df2[(df2$IsCanceled == 0 ),])
+
+cancelled<-(df2[(df2$IsCanceled == 1 ),])
+
+#View(df2)
+```
+
+#Graphs, Histograms and Box Plots
+```{r}
+
+#Cancellations Based on Repeated Customers Across Meal Types
+df2$Meal<-as.factor(df2$Meal)
+df2 %>% 
+  group_by(Meal, IsCanceled) %>% 
+  summarize(`Pct of Customers that are Repeat` = mean(IsRepeatedGuest)) %>% 
+  ggplot(aes(x=Meal, y=`Pct of Customers that are Repeat`, fill = as.factor(IsCanceled))) + 
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_minimal() + xlab("Visitor Type") + ggtitle("Repeat Customers Across Meal types by Cancellations")
+ggsave("Cancellations Based on Repeated Customers Across Meal Types.png", height = 7, width = 13)
+
+
+Average_Cancellation_Rate<-mean(df2$IsCanceled)
+#Mostly by the high level view, we find out that 28% of the people cancel their hotel booking. This is just an initial analysis, not based on any factor/attribute.
+#Pie Chart
+#We charted a pie chart to find out the percentage of visitors belonging to a category
+library(RColorBrewer)
+myPalette <- brewer.pal(5, "Set2") 
+mytable <- table(df2$VisitorType)
+lbls <- c("Business Travel", "Couple", "Family ", "Solo Traveler")
+pct <- round(mytable/sum(mytable)*100)
+lbls <- paste(lbls,pct)
+paste(lbls,"%",sep="")
+pie(mytable, labels = lbls,col=myPalette,
+    main="Pie Chart of Visitor Types")
+
+#Average booking changes
+df2 %>% 
+  group_by(VisitorType, IsCanceled) %>% 
+  summarize(AvgBookingChanges = mean(BookingChanges),.groups = 'drop') %>% 
+  ggplot(aes(x=VisitorType, y=AvgBookingChanges, fill = as.factor(IsCanceled))) + 
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_minimal()
+
+#Parking Spaces
+ggplot(df2, aes(x= RequiredCarParkingSpaces, group = IsCanceled)) + 
+  geom_bar(aes(y = ..prop.., fill = factor(..x..)), stat="count") +
+  geom_text(aes( label = scales::percent(..prop..),
+                 y= ..prop.. ), stat= "count", vjust = -.5) +
+  labs(y = "Percent", fill="Required Spaces") +
+  facet_grid(~IsCanceled) +
+  scale_y_continuous(labels = scales::percent) + ggtitle("Probability of this Number of Parking Spaces Given Cancelling or not") + xlab("Required Parking Spaces")
+ggsave('Parking Spaces Prob Cancel.png', height = 7, width = 13)
+
+
+#Bar plot for Visitor type
+#From this we can predict, that maximum families cancel their bookings followed by couples and solo travelers. Usually business travelers do not cancel their booking as they may not always have the liberty to do so.
+df2 %>% 
+  group_by(VisitorType) %>% 
+  summarize(`Average Cancellation Rate` = mean(IsCanceled)) %>% 
+  ggplot(aes(x=VisitorType, y=`Average Cancellation Rate`)) + 
+  geom_bar(stat="identity", position=position_dodge())+
+  theme_minimal() +
+  geom_hline(yintercept=mean(df2$IsCanceled))
+
+
+#Market Segment wise isCanceled
+
+library(ggplot2)
+
+ggplot(notcancelled, aes(x = MarketSegment)) +  
+  geom_bar(aes(y = (..count..)/sum(..count..))) + ylab("Percentage") + ggtitle("Distribution Across Market Segments when the Booking is not cancelled")
+
+ggplot(cancelled, aes(x = MarketSegment)) +  
+  geom_bar(aes(y = (..count..)/sum(..count..))) + ylab("Percentage") + ggtitle("Distribution Across Market Segments when the Booking is cancelled")
+
+#So here we can say that there are more cancellations when the market segment type is group. That is, most groups cancel their bookings.
+#we can also infer that when the market segment is direct i.e when the booking is done directly, less people tend to cancel their bookings.
+#Also when the booking is done online through a travel agent, more people cancel their hotel booking.
+
+
+#Boxplots and Histograms
+hist(df2$LeadTime)
+hist(df2$BookingChanges)
+hist(df2$RequiredCarParkingSpaces)
+boxplot(LeadTime~IsCanceled,data=df2, main="LeadTimes")
+
+boxplot(IsCanceled~PreviousBookingsNotCanceled,data=data, main="previous bookings not canceled")
+
+boxplot(IsCanceled~RequiredCarParkingSpaces,data=data, main="Required car parking spaces")
+
+boxplot(StaysInWeekendNights,data=data, main="Required car parking spaces")
+
+hist(cancelled$LeadTime)
+hist(notcancelled$LeadTime)
+
+hist(cancelled$DoNotGetRoomChoice, xlab="Do not get Room Choice", xlim=c(0,1))
+hist(notcancelled$DoNotGetRoomChoice, xlab="Do not get Room Choice", xlim=c(0,1))
+
+hist(cancelled$BookingChanges)
+hist(notcancelled$BookingChanges)
+
+hist(cancelled$PreviousBookingsNotCanceled)
+hist(notcancelled$PreviousBookingsNotCanceled)
+
+hist(cancelled$RequiredCarParkingSpaces)
+hist(notcancelled$RequiredCarParkingSpaces)
+```
+
+
+#Implementing SVM Prediction Model
+```{r}
+library(caret)
+library(kernlab)
+
+df_SVM<-df2[,c("LeadTime","CustomerType","TotalNumberOfDaysStayed","DepositType","PreviousCancellations","Adults","IsRepeatedGuest","PreviousBookingsNotCanceled","IsCanceled","VisitorType","MarketSegment","RequiredCarParkingSpaces")]
+df_SVM$IsCanceled<-as.factor(df_SVM$IsCanceled)
+
+set.seed(10)
+trainList <-createDataPartition(y=df_SVM$IsCanceled,p=0.60,list=FALSE) 
+nrow(trainList)
+
+
+trainSet<-df_SVM[trainList,]
+
+testSet<-df_SVM[-trainList,]
+nrow(testSet)
+
+dim(trainSet)
+dim(testSet)
+
+boxplot(IsCanceled ~ VisitorType,data=trainSet)
+boxplot(IsCanceled ~ PreviousCancellations,data=trainSet)
+
+#svm Model for entity DepositType
+
+svmModel_DepositType <- ksvm(IsCanceled ~ DepositType, data=trainSet, C=3,cross = 5, prob.model = TRUE)
+svmModel_DepositType
+
+predOut_DepositType <- predict(svmModel_DepositType,testSet, type = "response")
+predOut_DepositType
+str(predOut_DepositType)
+
+table(predOut_DepositType, testSet$IsCanceled)
+table(predOut_DepositType)
+
+Accuracy_DepositType<-sum(diag(table(predOut_DepositType, testSet$IsCanceled)))/sum(table(predOut_DepositType, testSet$IsCanceled))
+Accuracy_DepositType
+
+confusionMatrix(predOut_DepositType,testSet$IsCanceled)
+
+
+#Svm Model for entity CustomerType
+
+svmModel_CustomerType <- ksvm(IsCanceled ~ CustomerType, data=trainSet, C=3,cross = 5, prob.model = TRUE)
+svmModel_CustomerType
+
+predOut_CustomerType <- predict(svmModel_CustomerType,testSet, type = "response")
+predOut_CustomerType
+str(predOut_CustomerType)
+
+table(predOut_CustomerType, testSet$IsCanceled)
+table(predOut_CustomerType)
+
+Accuracy_CustomerType<-sum(diag(table(predOut_CustomerType,testSet$IsCanceled)))/sum(table(predOut_CustomerType, testSet$IsCanceled))
+Accuracy_CustomerType
+
+confusionMatrix(predOut_CustomerType,testSet$IsCanceled)
+
+#Svm Model for entity VisitorType
+
+svmModel_VisitorType <- ksvm(IsCanceled ~ VisitorType, data=trainSet, C=3,cross = 5, prob.model = TRUE)
+svmModel_VisitorType
+
+predOut_VisitorType <- predict(svmModel_VisitorType,testSet, type = "response")
+predOut_VisitorType
+str(predOut_VisitorType)
+
+table(predOut_VisitorType, testSet$IsCanceled)
+table(predOut_VisitorType)
+
+Accuracy_VisitorType<-sum(diag(table(predOut_VisitorType,testSet$IsCanceled)))/sum(table(predOut_VisitorType, testSet$IsCanceled))
+Accuracy_VisitorType
+
+confusionMatrix(predOut_VisitorType,testSet$IsCanceled)
+
+#Svm Model for entity CustomerType, DepositType, MarketSegment, RequiredCarParkingSpaces, PreviousBookingNotCanceled, LeadTime
+
+svmModel_Combined <- ksvm(IsCanceled ~ CustomerType + DepositType + MarketSegment + RequiredCarParkingSpaces + PreviousBookingsNotCanceled + LeadTime, data=trainSet, C=3,cross = 5, prob.model = TRUE)
+svmModel_Combined
+
+predOut_Combined <- predict(svmModel_Combined,testSet, type = "response")
+predOut_Combined
+str(predOut_Combined)
+
+table(predOut_Combined, testSet$IsCanceled)
+table(predOut_Combined)
+
+Accuracy_Combined<-sum(diag(table(predOut_Combined,testSet$IsCanceled)))/sum(table(predOut_Combined, testSet$IsCanceled))
+Accuracy_Combined
+
+confusionMatrix(predOut_Combined,testSet$IsCanceled)
+
+#SVM Model for the entire dataset
+svmModel <- ksvm(IsCanceled ~., data=trainSet, C=3,cross = 5, prob.model = TRUE)
+svmModel
+
+predOut <- predict(svmModel,testSet, type = "response")
+
+predOut
+str(predOut)
+
+table(predOut, testSet$IsCanceled)
+table(predOut)
+
+Accuracy<-sum(diag(table(predOut, testSet$IsCanceled)))/sum(table(predOut, testSet$IsCanceled))
+Accuracy
+
+confusionMatrix(predOut,testSet$IsCanceled)
+
+```
+
+#Implementing RPart
+```{r}
+library(e1071)
+library(rpart)
+binary.model<-rpart(df2$IsCanceled ~., data=df2) 
+summary(binary.model)
+library(rpart.plot)
+rpart.plot(binary.model)
+
+
+df_rpart<-df2[,c("IsCanceled","LeadTime","CustomerType","TotalNumberOfDaysStayed","DepositType","PreviousCancellations","Adults","IsRepeatedGuest","PreviousBookingsNotCanceled", "ReservedRoomType" , "AssignedRoomType", "RequiredCarParkingSpaces", "TotalOfSpecialRequests","VisitorType")]
+
+binary.model2<-rpart(df_rpart$IsCanceled ~., data=df_rpart) 
+
+library(rpart.plot)
+rpart.plot(binary.model2)
+summary(binary.model2)
+```
+
+
+#Implementing Linear and Multiple Regression Model
+```{r}
+lmOut_LeadTime <- lm(IsCanceled ~ LeadTime , data=df2)
+summary(lmOut_LeadTime)
+#Multiple R-squared = 5%
+
+lmOut_TotalNumberOfDaysStayed <- lm(IsCanceled~ TotalNumberOfDaysStayed, data=df2)
+summary(lmOut_TotalNumberOfDaysStayed)
+
+lmOut_Adults <- lm(IsCanceled ~ Adults, data=df2)
+summary(lmOut_Adults)
+
+lmOut_Children <- lm(IsCanceled ~ Children, data=df2)
+summary(lmOut_Children)
+
+lmOut_Babies <- lm(IsCanceled ~ Babies, data=df2)
+summary(lmOut_Babies)
+
+lmOut_Country <- lm(IsCanceled ~ Country, data=df2)
+summary(lmOut_Country)
+#Multiple R-squared = 9%
+
+lmOut_MarketSegment <- lm(IsCanceled ~ MarketSegment, data=df2)
+summary(lmOut_MarketSegment)
+#Multiple R-squared = 6%
+
+lmOut_Meal <- lm(IsCanceled ~ Meal, data = df2)
+summary(lmOut_Meal)
+
+lmOut_IsRepeatedGuest <- lm(IsCanceled ~ IsRepeatedGuest, data = df2)
+summary(lmOut_IsRepeatedGuest)
+
+lmOut_PreviousCancellations <- lm(IsCanceled ~ PreviousCancellations, data = df2)
+summary(lmOut_PreviousCancellations)
+
+lmOut_PreviousBookingsNotCanceled <- lm(IsCanceled ~ PreviousBookingsNotCanceled, data = df2)
+summary(lmOut_PreviousBookingsNotCanceled)
+
+lmOut_AssignedRoomType <- lm(IsCanceled ~ AssignedRoomType, data = df2)
+summary(lmOut_AssignedRoomType)
+#Multiple R-squared = 3%
+
+lmOut_DepositType <- lm(IsCanceled ~ DepositType, data = df2)
+summary(lmOut_DepositType)
+#Multiple R-squared = 10%
+
+lmOut_CustomerType <- lm(IsCanceled ~ CustomerType, data = df2)
+summary(lmOut_CustomerType)
+
+lmOut_RequiredCarParkingSpaces <- lm(IsCanceled ~ RequiredCarParkingSpaces, data = df2)
+summary(lmOut_RequiredCarParkingSpaces)
+#Multiple R-squared = 6%
+
+lmOut_TotalOfSpecialRequests <- lm(IsCanceled ~ TotalOfSpecialRequests, data = df2)
+summary(lmOut_TotalOfSpecialRequests)
+
+lmOut_BookingChanges <- lm(IsCanceled ~ BookingChanges, data = df2)
+summary(lmOut_BookingChanges)
+
+lmOut_ReservedRoomType <- lm(IsCanceled ~ ReservedRoomType, data = df2)
+summary(lmOut_ReservedRoomType)
+
+
+#Combined
+lmOut_1 <- lm(formula = IsCanceled ~ . , data = df2)
+summary(lmOut_1)
+#Multiple R-squared = 38%
+
+lmOut_2 <- lm(IsCanceled ~ MarketSegment +LeadTime + DepositType + RequiredCarParkingSpaces + Country, data = df2)
+summary(lmOut_2)
+
+#Multiple R-squared = 32%
+
+
+scatter.smooth(x=df2$TotalNumberOfDaysStayed, y=df2$LeadTime, main="ISCANCELLED ~ LEADTIMNE")  # scatterplot
+
+```
+#Implementing Maps
+```{r}
+#install.packages("rworldmap")
+library(sp)
+library(rworldmap)
+vignette('rworldmap')
+library(RColorBrewer)
+library(classInt)
+
+#install.packages("name_of_package")
+#library(maps)
+#dat <- iso3166
+#View(dat)
+colourPalette <- RColorBrewer::brewer.pal(5,"YlGnBu")
+
+#Entire Data World Map
+df2_Map <- joinCountryData2Map(df2, joinCode = "ISO3", nameJoinColumn = "Country")
+#View(df2_Map)
+
+par(mai=c(0,0,0.2,0),xaxs="i",yaxs="i")
+
+mapParams<-mapCountryData( df2_Map, nameColumnToPlot="TotalNumberOfDaysStayed", oceanCol="lightgrey",missingCountryCol="white", borderCol="black", addLegend=FALSE, colourPalette = colourPalette)
+
+do.call( addMapLegend, c( mapParams
+   , legendLabels="all"
+   , legendWidth=0.5
+   , legendIntervals="df2$TotalNumberOfDaysStayed"
+   , legendMar = 2 ) )
+
+
+#Cancelled Booking World Map
+
+df2_Map2 <- joinCountryData2Map(cancelled, joinCode = "ISO3", nameJoinColumn = "Country")
+#View(df2_Map2)
+
+par(mai=c(0,0,0.2,0),xaxs="i",yaxs="i")
+
+mapParams<-mapCountryData( df2_Map2, nameColumnToPlot="LeadTime", oceanCol="lightblue",missingCountryCol="white", borderCol="black", addLegend=FALSE)
+
+do.call( addMapLegend, c( mapParams
+   , legendLabels="all"
+   , legendWidth=0.5
+   , legendIntervals="df2$LeadTime"
+   , legendMar = 2 ) )
+
+
+
+#Cancelled Booking World Map
+
+df2_Map3 <- joinCountryData2Map(notcancelled, joinCode = "ISO3", nameJoinColumn = "Country")
+#View(df2_Map3)
+
+par(mai=c(0,0,0.2,0),xaxs="i",yaxs="i")
+
+mapParams<-mapCountryData( df2_Map3, nameColumnToPlot="LeadTime", oceanCol="lightblue",missingCountryCol="white", borderCol="black", addLegend=FALSE)
+
+do.call( addMapLegend, c( mapParams
+   , legendLabels="all"
+   , legendWidth=0.5
+   , legendIntervals="df2$LeadTime"
+   , legendMar = 2 ) )
+
+df2_Map3$MarketSegment <- as.factor(df2_Map3$MarketSegment)
+
+mapParams<-mapCountryData( df2_Map3, nameColumnToPlot="MarketSegment", oceanCol="lightblue",missingCountryCol="white", borderCol="black", addLegend=TRUE,catMethod = "categorical",colourPalette = "heat")
+
+```
+
+
+
+
+```{r}
+#Apriori and association mining rules
+
+#install.packages("arules")
+library(arules)
+#install.packages("arulesViz")
+library(arulesViz)
+library(Matrix)
+
+my_resort<-df2
+
+my_resort$MarketSegment <- as.factor(my_resort$MarketSegment)
+my_resort$DepositType <- as.factor(my_resort$DepositType)
+my_resort$RequiredCarParkingSpaces <- as.factor(my_resort$RequiredCarParkingSpaces)
+my_resort$PreviousCancellations <- as.factor(my_resort$PreviousCancellations)
+my_resort$CustomerType <- as.factor(my_resort$CustomerType)
+my_resort$ReservedRoomType <- as.factor(my_resort$ReservedRoomType)
+my_resort$AssignedRoomType <- as.factor(my_resort$AssignedRoomType)
+my_resort$IsCanceled<-as.factor(my_resort$IsCanceled)
+my_resort$VisitorType <- as.factor(my_resort$VisitorType)
+
+
+str(my_resort$IsCanceled)
+Market_Segment <- data.frame(my_resort$IsCanceled, my_resort$MarketSegment,my_resort$DepositType,my_resort$RequiredCarParkingSpaces,my_resort$PreviousCancellations,my_resort$CustomerType,my_resort$ReservedRoomType,my_resort$AssignedRoomType,my_resort$VisitorType)
+
+Market_Segment_trans <- as(Market_Segment,"transactions")
+
+summary(Market_Segment_trans)
+
+rules1 <- apriori(Market_Segment_trans, 
+                  parameter=list(supp=0.033, conf=0.70), 
+                  control=list(verbose=F),
+                  appearance=list(default="lhs",rhs=("my_resort.IsCanceled=1")))
+inspect(rules1)
+
+rules2 <- apriori(Market_Segment_trans, 
+                  parameter=list(supp=0.09, conf=0.90), 
+                  control=list(verbose=F),
+                  appearance=list(default="lhs",rhs=("my_resort.IsCanceled=0")))
+inspect(rules2)
+
+
+ifreq<-itemFrequency(Market_Segment_trans)
+View(ifreq)
+str(ifreq)
+sortfreq<-sort(ifreq)
+head(sortfreq)
+tail(sortfreq)
+
+
+Market_Segment_transPlot<-itemFrequencyPlot(Market_Segment_trans, topN=20)
+Market_Segment_transPlot
+
+```
+
+
