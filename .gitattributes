@@ -1,2 +1,4 @@
 *.R linguist-detectable=true
+static/* linguist-vendored
+
 
