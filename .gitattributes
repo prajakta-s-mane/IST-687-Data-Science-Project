@@ -1,4 +1,1 @@
-*.R linguist-detectable=true
-static/* linguist-vendored
-
-
+*.Rmd linguist-language=R
